@@ -1,7 +1,7 @@
 """
 OpenAI SDK runtime — dùng cho:
 
-  Blue Team → OpenRouter liquid/lfm-2.5-2.6b (create_blue_pair)
+  Blue Team → OpenAI-compatible API (create_blue_pair)
   Red Team  → OpenAI gpt-4o-mini (create_openai_pair) khi RED_TEAM_PROVIDER=openai
 
 Gemini Red Team dùng Google ADK trong agents/*.py — không đi qua file này.
@@ -16,8 +16,10 @@ from core.config import (
     get_red_provider,
     get_blue_model,
     get_blue_provider,
-    blue_client_kwargs,
+    get_blue_api_key,
+    get_blue_base_url,
     red_openai_client_kwargs,
+    get_blue_api_key as _get_blue_api_key,
 )
 
 
@@ -191,14 +193,26 @@ def create_blue_pair(
     output_hooks: list | None = None,
     temperature: float = 0.4,
 ) -> tuple[OpenAIAgent, OpenAIRunner]:
-    """Blue Team — always OpenRouter liquid/lfm-2.5-2.6b."""
+    """Blue Team — OpenAI-compatible API."""
+    # Build client kwargs for Blue
+    blue_kwargs = {}
+    blue_kwargs["api_key"] = _get_blue_api_key()
+    base_url = get_blue_base_url()
+    if base_url:
+        # Remove trailing slash and ensure proper format
+        base_url = base_url.rstrip("/")
+        # Add /v1 only if not already present
+        if not base_url.endswith("/v1"):
+            base_url = base_url + "/v1"
+        blue_kwargs["base_url"] = base_url
+
     return _make_pair(
         name=name,
         instruction=instruction,
         app_name=app_name,
         model=get_blue_model(),
-        provider=get_blue_provider(),
-        client_kwargs=blue_client_kwargs(),
+        provider="blue",
+        client_kwargs=blue_kwargs,
         plugins=plugins,
         input_hooks=input_hooks,
         output_hooks=output_hooks,

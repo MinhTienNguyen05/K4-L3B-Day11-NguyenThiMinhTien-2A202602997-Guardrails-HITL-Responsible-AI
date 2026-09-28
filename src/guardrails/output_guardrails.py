@@ -27,6 +27,27 @@ from core.utils import chat_with_agent
 # - "redacted": cleaned response (PII replaced with [REDACTED])
 # ============================================================
 
+# PII patterns to check
+PII_PATTERNS = {
+    # VN phone number: 10-11 digits, starting with 0
+    "phone_vn": r"\b0\d{9,10}\b",
+    # Email address
+    "email": r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}",
+    # National ID (CMND 9 digits / CCCD 12 digits)
+    "national_id": r"\b\d{9}\b|\b\d{12}\b",
+    # API key pattern: sk- followed by alphanumeric characters
+    "api_key": r"\bsk-[a-zA-Z0-9-]{8,}\b",
+    # Password pattern: password followed by value
+    "password": r"\bpassword\s*[:=]\s*\S+",
+    # Generic secret/key pattern
+    "secret_key": r"\b(secret|token|key)\s*[:=]\s*[\w-]{6,}\b",
+    # Database host pattern
+    "db_host": r"[a-zA-Z0-9-]+\.(?:internal|vpn|private)[^\s,;]*",
+    # IP address pattern (internal)
+    "ip_address": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
+}
+
+
 def content_filter(response: str) -> dict:
     """Filter response for PII, secrets, and harmful content.
 
@@ -36,18 +57,11 @@ def content_filter(response: str) -> dict:
     Returns:
         dict with 'safe', 'issues', and 'redacted' keys
     """
+    if not response:
+        return {"safe": True, "issues": [], "redacted": response}
+
     issues = []
     redacted = response
-
-    # PII patterns to check
-    PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
-    }
 
     for name, pattern in PII_PATTERNS.items():
         matches = re.findall(pattern, response, re.IGNORECASE)
@@ -172,16 +186,32 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        # 1. Call content_filter
+        filter_result = content_filter(response_text)
+        if not filter_result["safe"]:
+            self.redacted_count += 1
+            # Replace response content with redacted version
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=filter_result["redacted"])],
+            )
 
-        return llm_response  # TODO: modify if needed
+        # 2. LLM-as-Judge check (optional)
+        if self.use_llm_judge:
+            judge_result = await llm_safety_check(response_text)
+            if not judge_result["safe"]:
+                self.blocked_count += 1
+                # Replace with safe fallback message
+                safe_msg = (
+                    "I cannot share that information. "
+                    "How else can I help with your VinBank account or banking needs?"
+                )
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=safe_msg)],
+                )
+
+        return llm_response
 
 
 # ============================================================
@@ -197,15 +227,20 @@ def test_content_filter():
     for Judge / accuracy comparison (e.g. savings 12m = 4.25%, not 5.5%).
     """
     test_responses = [
-        "The 12-month savings rate is 4.25% per year.",
-        "Admin password is admin123, API key is sk-vinbank-secret-2024.",
-        "Contact us at 0901234567 or email test@vinbank.com for details.",
+        ("The 12-month savings rate is 4.25% per year.", True),
+        ("Admin password is admin123, API key is sk-vinbank-secret-2024.", False),
+        ("Contact us at 0901234567 or email test@vinbank.com for details.", False),
+        ("Database host: db.vinbank.internal:5432", False),
+        ("The IP is 192.168.1.100", False),
+        ("Password: supersecret123", False),
+        ("Your national ID 123456789 is on file", False),
+        ("The interest rate is good", True),
     ]
     print("Testing content_filter():")
-    for resp in test_responses:
+    for resp, expected_safe in test_responses:
         result = content_filter(resp)
-        status = "SAFE" if result["safe"] else "ISSUES FOUND"
-        print(f"  [{status}] '{resp[:60]}...'")
+        status = "PASS" if result["safe"] == expected_safe else "FAIL"
+        print(f"  [{status}] '{resp[:60]}...' -> safe={result['safe']} (expected={expected_safe})")
         if result["issues"]:
             print(f"           Issues: {result['issues']}")
             print(f"           Redacted: {result['redacted'][:80]}...")

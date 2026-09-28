@@ -4,9 +4,7 @@ Lab 11 — Configuration, provider selection, API keys.
 Hai tầng model (không trộn):
 
   Blue Team (CP2–CP3, guardrails / pipeline / protected agent)
-    → CỐ ĐỊNH OpenRouter ``liquid/lfm-2.5-2.6b``
-       https://openrouter.ai/liquid/lfm-2.5-2.6b
-    → Cần ``OPENROUTER_API_KEY``
+    → OpenAI-compatible API (OPENAI_API_KEY + OPENAI_BASE_URL + MODEL)
 
   Red Team (CP4)
     → Chọn một provider: OpenAI hoặc Gemini
@@ -33,12 +31,35 @@ except ImportError:
 PROVIDER_OPENAI = "openai"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENROUTER = "openrouter"
+PROVIDER_CUSTOM = "custom"  # OpenAI-compatible custom endpoint
 
-# --- Blue Team (LOCKED) ---
-BLUE_PROVIDER = PROVIDER_OPENROUTER
-BLUE_MODEL = "liquid/lfm-2.5-2.6b"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_MODEL = BLUE_MODEL  # alias
+# --- Blue Team (AliYun Model Studio) ---
+BLUE_PROVIDER = PROVIDER_OPENAI
+BLUE_MODEL = os.environ.get("MODEL", "qwen3.8-max")
+BLUE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
+BLUE_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
+
+def get_blue_provider() -> str:
+    return BLUE_PROVIDER
+
+def get_blue_model() -> str:
+    return BLUE_MODEL
+
+def get_blue_api_key() -> str:
+    return BLUE_API_KEY
+
+def get_blue_base_url() -> str:
+    return BLUE_BASE_URL
+
+def blue_client_kwargs() -> dict:
+    """OpenAI SDK kwargs for Blue Team."""
+    kwargs = {"api_key": BLUE_API_KEY or None}
+    if BLUE_BASE_URL:
+        kwargs["base_url"] = BLUE_BASE_URL.rstrip("/") + "/v1"
+    return kwargs
+
+def blue_provider_label() -> str:
+    return f"blue:{get_blue_model()}"
 
 # --- Red Team ---
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
@@ -95,36 +116,8 @@ except FileNotFoundError:
     DEMO_SECRET_NOTE = "protected data missing — see data/protected/vinbank_secrets.json"
 
 
-# ---------------------------------------------------------------------------
-# Blue Team — fixed OpenRouter Liquid
-# ---------------------------------------------------------------------------
-
-def get_blue_provider() -> str:
-    return BLUE_PROVIDER
-
-
-def get_blue_model() -> str:
-    # Hard-locked; env cannot override for the graded Blue Team path.
-    return BLUE_MODEL
-
-
 def get_openrouter_api_key() -> str:
     return os.environ.get("OPENROUTER_API_KEY", "").strip()
-
-
-def blue_client_kwargs() -> dict:
-    """OpenAI SDK kwargs pointing at OpenRouter (Blue Team only)."""
-    return {
-        "api_key": get_openrouter_api_key() or None,
-        "base_url": (
-            os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).strip()
-            or OPENROUTER_BASE_URL
-        ),
-    }
-
-
-def blue_provider_label() -> str:
-    return f"{get_blue_provider()}:{get_blue_model()}"
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +167,6 @@ def red_openai_client_kwargs() -> dict:
 
 
 def red_provider_label(tier: str = "advance") -> str:
-    # tier giữ để tương thích call site; cả hai agent cùng model .env
     _ = tier
     return f"{get_red_provider()}:{get_red_model()}"
 
@@ -201,12 +193,10 @@ def get_model_name() -> str:
 
 
 def uses_openai_sdk() -> bool:
-    """Deprecated name: True when Red Team uses OpenAI SDK (not Gemini ADK)."""
     return red_uses_openai_sdk()
 
 
 def openai_compatible_client_kwargs() -> dict:
-    """Default client kwargs = Red Team OpenAI (not Blue/OpenRouter)."""
     return red_openai_client_kwargs()
 
 
@@ -235,12 +225,12 @@ def is_harder_model() -> bool:
 
 
 def setup_api_key():
-    """Ensure keys for Blue (OpenRouter) + Red / Red Advance (OpenAI or Gemini)."""
-    if not get_openrouter_api_key():
-        os.environ["OPENROUTER_API_KEY"] = input(
-            "Enter OpenRouter API Key (Blue): "
+    """Ensure keys for Blue (OpenAI-compatible) + Red / Red Advance (OpenAI or Gemini)."""
+    if not get_blue_api_key():
+        os.environ["OPENAI_API_KEY"] = input(
+            "Enter API Key for Blue: "
         ).strip()
-    print(f"Blue  — {blue_provider_label()}  [LOCKED]")
+    print(f"Blue  — {blue_provider_label()}")
 
     red = get_red_provider()
     model = get_red_model()
